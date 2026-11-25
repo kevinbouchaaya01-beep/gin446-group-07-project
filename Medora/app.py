@@ -16,7 +16,14 @@ def init():
     CREATE TABLE IF NOT EXISTS appointments(id INTEGER PRIMARY KEY,slot INTEGER REFERENCES slots(id),patient INTEGER REFERENCES users(id),status TEXT NOT NULL DEFAULT 'Booked',created TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE UNIQUE INDEX IF NOT EXISTS one_booking ON appointments(slot) WHERE status!='Cancelled';'''); d.commit()
     if os.environ.get('DEMO_MODE','0')=='1':
-        for name,email,role,specialty in [('Sarah Haddad','doctor@medora.test','doctor','Cardiology'),('Adam Khoury','eye@medora.test','doctor','Ophthalmology'),('Lina Saad','general@medora.test','doctor','General Medicine'),('Reception','assistant@medora.test','assistant',''),('Clinic Admin','admin@medora.test','admin',''),('Demo Patient','patient@medora.test','patient','')]:
+        d.execute(
+            "UPDATE users SET email=? WHERE email=? "
+            "AND role='doctor' AND specialty='Cardiology' "
+            "AND NOT EXISTS (SELECT 1 FROM users WHERE email=?)",
+            ('cardio@medora.test', 'doctor@medora.test', 'cardio@medora.test')
+        )
+
+        for name,email,role,specialty in [('Sarah Haddad','cardio@medora.test','doctor','Cardiology'),('Adam Khoury','eye@medora.test','doctor','Ophthalmology'),('Lina Saad','general@medora.test','doctor','General Medicine'),('Reception','assistant@medora.test','assistant',''),('Clinic Admin','admin@medora.test','admin',''),('Demo Patient','patient@medora.test','patient','')]:
             if not d.execute('SELECT 1 FROM users WHERE email=?',(email,)).fetchone(): d.execute('INSERT INTO users(name,email,password,role,specialty) VALUES(?,?,?,?,?)',(name,email,generate_password_hash(os.environ['DEMO_PASSWORD']),role,specialty))
         for u in d.execute("SELECT id FROM users WHERE role='doctor'").fetchall():
             for day in range(7):

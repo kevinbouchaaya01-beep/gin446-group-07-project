@@ -10,7 +10,7 @@ python app.py
 ```
 Open http://127.0.0.1:5000. All demo accounts use the password configured in the DEMO_PASSWORD environment variable.
 - patient@medora.test
-- doctor@medora.test (Cardiology)
+- cardio@medora.test (Cardiology)
 - assistant@medora.test
 - admin@medora.test
 

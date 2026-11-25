@@ -34,7 +34,7 @@ def test_booking(client):
     from app import db
     with app.app_context():
         doctor = db().execute(
-            "SELECT id FROM users WHERE email='doctor@medora.test'"
+            "SELECT id FROM users WHERE email='cardio@medora.test'"
         ).fetchone()[0]
     slot = client.get('/api/slots?doctor='+str(doctor)).json[0]['id']
     with client.session_transaction() as s:

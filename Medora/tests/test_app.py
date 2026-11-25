@@ -118,3 +118,19 @@ def test_demo_email_migration(client):
         changed = db().execute("SELECT id FROM users WHERE email='cardio@medora.test'").fetchone()
         assert changed[0] == doctor
         assert db().execute("SELECT 1 FROM users WHERE email='doctor@medora.test'").fetchone() is None
+
+
+def test_public_pages_and_assets(client):
+    assert b'Better care.' in client.get('/').data
+    assert b'data-password="password"' in client.get('/login').data
+    assert client.get('/static/clinic.svg').status_code == 200
+    assert client.get('/static/favicon.svg').status_code == 200
+    missing = client.get('/not-a-real-page')
+    assert missing.status_code == 404
+    assert b'Back to Medora' in missing.data
+
+def test_booking_ui_elements(client):
+    response = login(client, 'patient@medora.test')
+    assert b'id="reschedule-dialog"' in response.data
+    assert b'id="slot-date"' in response.data
+    assert b'doctor-heart.svg' in response.data

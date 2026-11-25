@@ -11,7 +11,19 @@ const active = ['Booked','Confirmed','Waiting','In consultation'];
 const now = () => new Date().toLocaleString('sv-SE').replace(' ','T').slice(0,16);
 const readable = date => date.replace('T',' · ');
 
+let availableSlots = [];
 function fillSlots(slots) {
+  availableSlots = slots;
+  const dateSelect=document.querySelector('#slot-date');
+  dateSelect.replaceChildren(new Option('All dates',''));
+  for (const date of [...new Set(slots.map(s=>s.start.slice(0,10)))]) dateSelect.add(new Option(date,date));
+  document.querySelector('#slot-date-label').hidden = !slots.length;
+  renderSlots();
+  document.querySelector('#booking').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function renderSlots() {
+  const date=document.querySelector('#slot-date').value;
+  const slots=availableSlots.filter(s=>!date || s.start.startsWith(date));
   const select = document.querySelector('#slots');
   if (!select) return;
   select.replaceChildren(new Option(slots.length ? 'Choose a time' : 'No available slots', ''));
@@ -30,15 +42,18 @@ function fillSlots(slots) {
     };
     calendar.append(button);
   }
-  document.querySelector('#booking').scrollIntoView({behavior:'smooth',block:'center'});
 }
+document.querySelector('#slot-date')?.addEventListener('change',renderSlots);
 document.querySelectorAll('.choose').forEach(button => button.onclick = async () => {
+  button.disabled=true;
+  document.querySelector('#selected-doctor').textContent='Loading available times…';
   try {
     const response = await fetch('/api/slots?doctor=' + button.dataset.doctor);
     if (!response.ok) throw Error('Unable to load availability.');
     document.querySelector('#selected-doctor').textContent = 'Dr. ' + button.dataset.name;
     fillSlots(await response.json());
-  } catch (error) { document.querySelector('#selected-doctor').textContent = error.message; }
+  } catch (error) { fillSlots([]); document.querySelector('#selected-doctor').textContent = error.message; }
+  finally { button.disabled=false; }
 });
 document.querySelectorAll('.prompt-suggestion').forEach(button => button.onclick = () => {
   document.querySelector('#prompt').value = button.dataset.prompt;
@@ -46,6 +61,8 @@ document.querySelectorAll('.prompt-suggestion').forEach(button => button.onclick
 document.querySelector('#smart')?.addEventListener('submit', async event => {
   event.preventDefault();
   const output = document.querySelector('#smart-result');
+  const button=event.currentTarget.querySelector('button[type=submit]');
+  button.disabled=true;
   output.textContent = 'Finding available times…';
   try {
     const response = await fetch('/api/smart', {
@@ -57,6 +74,7 @@ document.querySelector('#smart')?.addEventListener('submit', async event => {
     output.textContent = data.matches.length + ' matching times. Choose one below.';
     fillSlots(data.matches);
   } catch (error) { output.textContent = error.message; }
+  finally { button.disabled=false; }
 });
 
 function filteredRows() {
@@ -65,8 +83,8 @@ function filteredRows() {
   const doctor = document.querySelector('#doctor-filter').value;
   const date = document.querySelector('#date-filter').value;
   return appointments.filter(a => {
-    if (view === 'upcoming' && (!active.includes(a.status) || a.start < now())) return false;
-    if (view === 'history' && active.includes(a.status) && a.start >= now()) return false;
+    if (view === 'upcoming' && (!active.includes(a.status) || (role==='patient' && a.start < now() && !['Waiting','In consultation'].includes(a.status)))) return false;
+    if (view === 'history' && active.includes(a.status) && (role!=='patient' || a.start >= now() || ['Waiting','In consultation'].includes(a.status))) return false;
     if (status !== 'all' && a.status !== status) return false;
     if (doctor !== 'all' && String(a.doctor_id) !== doctor) return false;
     if (date && !a.start.startsWith(date)) return false;
@@ -90,22 +108,30 @@ function statusButton(a, next) {
   return form;
 }
 async function reschedule(a) {
+  const dialog=document.querySelector('#reschedule-dialog');
+  const form=document.querySelector('#reschedule-form');
+  const select=document.querySelector('#reschedule-slot');
+  const output=document.querySelector('#reschedule-status');
+  const confirmButton=document.querySelector('#confirm-reschedule');
+  form.action='/appointment/'+a.id+'/reschedule';
+  document.querySelector('#reschedule-detail').textContent='Dr. '+a.doctor+' · Current visit: '+readable(a.start);
+  select.replaceChildren(new Option('Choose a new time',''));
+  confirmButton.disabled=true;
+  output.textContent='Loading available times…';
+  dialog.showModal();
   try {
     const response=await fetch('/api/slots?doctor='+a.doctor_id);
     if (!response.ok) throw Error('Unable to load open times.');
     const slots=await response.json();
-    if (!slots.length) { alert('No alternative slots available.'); return; }
-    const choice=prompt('Choose a new time by number:\n'+slots.map((s,i)=>(i+1)+'. '+readable(s.start)).join('\n'));
-    if (choice===null) return;
-    const number=Number(choice);
-    if (!Number.isInteger(number) || number<1 || number>slots.length) {alert('Invalid choice.');return;}
-    if (!confirm('Confirm new appointment time: '+readable(slots[number-1].start)+'?'))return;
-    const form=document.createElement('form');
-    form.method='post';form.action='/appointment/'+a.id+'/reschedule';
-    hidden(form,'csrf',csrf);hidden(form,'slot',slots[number-1].id);
-    document.body.append(form);form.submit();
-  } catch (error) {alert(error.message);}
+    if (form.action.split('/').slice(-2)[0]!==String(a.id)) return;
+    for (const slot of slots) select.add(new Option(readable(slot.start),slot.id));
+    output.textContent=slots.length?'Choose an available time to continue.':'No alternative times available.';
+  } catch (error) {output.textContent=error.message;}
 }
+document.querySelector('#reschedule-slot')?.addEventListener('change',event=>{
+  document.querySelector('#confirm-reschedule').disabled=!event.target.value;
+});
+document.querySelector('#close-reschedule')?.addEventListener('click',()=>document.querySelector('#reschedule-dialog').close());
 function renderAppointments() {
   const tbody=document.querySelector('#appointments');
   tbody.replaceChildren();
@@ -154,7 +180,8 @@ async function refresh() {
     const response=await fetch('/api/appointments');
     if (!response.ok) throw Error();
     appointments=await response.json();renderAppointments();updateStats();
-  } catch(error) {console.warn('Unable to refresh appointments.');}
+    document.querySelector('#refresh-status').textContent='Updated just now · Auto-refresh every 8 seconds';
+  } catch(error) {document.querySelector('#refresh-status').textContent='Could not refresh. Please try again.';}
 }
 if (role) {
   refresh();setInterval(refresh,8000);

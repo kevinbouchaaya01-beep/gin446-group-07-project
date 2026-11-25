@@ -82,8 +82,8 @@ def counts(rows, role):
         return [("Today's visits",len([a for a in active if a['start'].startswith(today)])),('Waiting',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
     return [('Active appointments',len(active)),('Waiting room',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
 
-def valid_slot(doctor, start):
-    return db().execute('SELECT 1 FROM slots WHERE id=? AND start>=?',(doctor,dt.datetime.now().isoformat(timespec='minutes'))).fetchone()
+def valid_slot(slot):
+    return db().execute('SELECT 1 FROM slots WHERE id=? AND start>=?',(slot,dt.datetime.now().isoformat(timespec='minutes'))).fetchone()
 
 @app.get('/dashboard')
 @roles('patient','doctor','assistant','admin')
@@ -115,7 +115,7 @@ def reschedule(id):
     if g.user['role']=='patient' and appointment['patient']!=g.user['id']: abort(403)
     if appointment['status'] not in ('Booked','Confirmed'): abort(400)
     slot=request.form.get('slot',type=int)
-    if not slot or not valid_slot(slot, None): abort(400)
+    if not slot or not valid_slot(slot): abort(400)
     try:
         updated=db().execute("UPDATE appointments SET slot=?,status='Booked' WHERE id=? AND status IN ('Booked','Confirmed')",(slot,id))
         if not updated.rowcount: abort(409)
@@ -180,5 +180,13 @@ def smart():
         if date is not None: dt.date.fromisoformat(date)
         matches=[dict(r) for r in db().execute("SELECT s.id,s.start,u.name,u.specialty FROM slots s JOIN users u ON u.id=s.doctor WHERE s.start>=? AND NOT EXISTS(SELECT 1 FROM appointments a WHERE a.slot=s.id AND a.status!='Cancelled') ORDER BY s.start",(dt.datetime.now().isoformat(timespec='minutes'),)) if (not spec or r['specialty']==spec) and (not date or r['start'].startswith(date)) and (not period or (int(r['start'][11:13])<12)==(period=='morning'))][:10]; return jsonify(matches=matches)
     except Exception: return jsonify(error='AI service unavailable or returned invalid data. Use manual booking.'),502
+@app.errorhandler(403)
+@app.errorhandler(404)
+@app.errorhandler(400)
+def error_page(error):
+    if request.path.startswith('/api/'):
+        return jsonify(error=error.description),error.code
+    return render_template('error.html',code=error.code,message={400:'Please check your request and try again.',403:'You do not have permission to view this page.',404:'This page could not be found.'}[error.code]),error.code
+
 with app.app_context(): init()
 if __name__=='__main__': app.run(port=5000)

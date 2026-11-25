@@ -162,3 +162,14 @@ if (role) {
   document.querySelectorAll('#appointment-view,#status-filter,#doctor-filter,#date-filter')
     .forEach(el=>el.addEventListener('change',renderAppointments));
 }
+
+// Password visibility only changes what is displayed, never the submitted value.
+document.querySelectorAll('[data-password]').forEach(button => {
+  button.addEventListener('click', () => {
+    const input = document.getElementById(button.dataset.password);
+    const showing = input.type === 'password';
+    input.type = showing ? 'text' : 'password';
+    button.textContent = showing ? 'Hide' : 'Show';
+    button.setAttribute('aria-pressed', String(showing));
+  });
+});

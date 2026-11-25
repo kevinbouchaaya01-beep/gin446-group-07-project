@@ -68,16 +68,29 @@ def register():
 @app.post('/logout')
 def logout(): session.clear(); return redirect(url_for('home'))
 def appointments():
-    sql='SELECT a.id,a.status,s.start,d.name doctor,p.name patient FROM appointments a JOIN slots s ON s.id=a.slot JOIN users d ON d.id=s.doctor JOIN users p ON p.id=a.patient'; role=g.user['role']; args=[]
+    sql='SELECT a.id,a.status,s.start,d.name doctor,p.name patient, s.doctor doctor_id FROM appointments a JOIN slots s ON s.id=a.slot JOIN users d ON d.id=s.doctor JOIN users p ON p.id=a.patient'; role=g.user['role']; args=[]
     if role=='patient': sql+=' WHERE a.patient=?'; args=[g.user['id']]
     if role=='doctor': sql+=' WHERE s.doctor=?'; args=[g.user['id']]
     return [dict(r) for r in db().execute(sql+' ORDER BY s.start',args)]
+
+def counts(rows, role):
+    active=[a for a in rows if a['status'] not in ('Cancelled','Completed')]
+    if role=='patient':
+        return [('Upcoming',len([a for a in active if a['start']>=dt.datetime.now().isoformat(timespec='minutes')])),('Completed',len([a for a in rows if a['status']=='Completed'])),('Cancelled',len([a for a in rows if a['status']=='Cancelled']))]
+    if role=='doctor':
+        today=dt.date.today().isoformat()
+        return [("Today's visits",len([a for a in active if a['start'].startswith(today)])),('Waiting',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
+    return [('Active appointments',len(active)),('Waiting room',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
+
+def valid_slot(doctor, start):
+    return db().execute('SELECT 1 FROM slots WHERE id=? AND start>=?',(doctor,dt.datetime.now().isoformat(timespec='minutes'))).fetchone()
+
 @app.get('/dashboard')
 @roles('patient','doctor','assistant','admin')
 def dashboard():
     doctors=db().execute("SELECT id,name,specialty FROM users WHERE role='doctor'").fetchall(); patients=db().execute("SELECT id,name FROM users WHERE role='patient'").fetchall() if g.user['role'] in ('assistant','admin') else []
     staff=db().execute('SELECT name,email,role,specialty FROM users ORDER BY role').fetchall() if g.user['role']=='admin' else []
-    return render_template('dashboard.html',doctors=doctors,patients=patients,staff=staff,rows=appointments())
+    rows=appointments(); return render_template('dashboard.html',doctors=doctors,patients=patients,staff=staff,rows=rows,stats=counts(rows,g.user['role']))
 @app.get('/api/appointments')
 @roles('patient','doctor','assistant','admin')
 def api_appointments(): return jsonify(appointments())
@@ -93,6 +106,41 @@ def book():
     try: db().execute('INSERT INTO appointments(slot,patient) VALUES(?,?)',(slot,patient)); db().commit(); flash('Appointment booked.')
     except sqlite3.IntegrityError: flash('That slot is already booked. Choose another.')
     return redirect(url_for('dashboard'))
+
+@app.post('/appointment/<int:id>/reschedule')
+@roles('patient','assistant','admin')
+def reschedule(id):
+    appointment=db().execute('SELECT * FROM appointments WHERE id=?',(id,)).fetchone()
+    if not appointment: abort(404)
+    if g.user['role']=='patient' and appointment['patient']!=g.user['id']: abort(403)
+    if appointment['status'] not in ('Booked','Confirmed'): abort(400)
+    slot=request.form.get('slot',type=int)
+    if not slot or not valid_slot(slot, None): abort(400)
+    try:
+        updated=db().execute("UPDATE appointments SET slot=?,status='Booked' WHERE id=? AND status IN ('Booked','Confirmed')",(slot,id))
+        if not updated.rowcount: abort(409)
+        db().commit(); flash('Appointment rescheduled.')
+    except sqlite3.IntegrityError:
+        db().rollback(); flash('That time is no longer available.')
+    return redirect(url_for('dashboard'))
+
+@app.post('/account/password')
+@roles('patient','doctor','assistant','admin')
+def change_password():
+    old=request.form.get('current_password','')
+    new=request.form.get('new_password','')
+    if not check_password_hash(g.user['password'],old):
+        flash('Current password is incorrect.')
+    elif not 10<=len(new)<=128:
+        flash('New password must be 10–128 characters.')
+    elif new==old:
+        flash('Choose a different password.')
+    else:
+        db().execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(new),g.user['id']))
+        db().commit()
+        flash('Password updated successfully.')
+    return redirect(url_for('dashboard'))
+
 @app.post('/appointment/<int:id>/status')
 @roles('patient','doctor','assistant','admin')
 def status(id):

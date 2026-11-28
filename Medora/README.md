@@ -12,7 +12,7 @@ Medora is a university web programming project built using **Flask, SQLite, Jinj
 4. **Administrator** views clinic-wide appointments, manages staff and doctor availability.
 5. The dashboards refresh every eight seconds through `GET /api/appointments`.
 
-The app includes appointment history, filtering, rescheduling (Booked or Confirmed appointments), cancellation confirmation, and password changes. The Gemini assistant **only extracts scheduling preferences**; it never diagnoses patients or automatically books an appointment.
+The app displays appointments in a single table, including cancelled and completed records, and supports cancellation confirmation. The Gemini assistant **only extracts scheduling preferences**; it never diagnoses patients or automatically books an appointment.
 
 ## Running locally (Mac)
 
@@ -51,7 +51,7 @@ Optional: set `GEMINI_API_KEY` and optionally `GEMINI_MODEL`. The app asks Gemin
 
 - `app.py`: Flask routes, login, appointment status rules, validation and database operations.
 - `templates/dashboard.html`: HTML page for the four role dashboards.
-- `static/app.js`: Fetch requests, time-slot buttons, table filters and eight-second refresh.
+- `static/app.js`: Fetch requests, available time dropdown and eight-second refresh.
 - `static/style.css`: Responsive page styling.
 - `tests/test_app.py`: Basic automated scenarios.
 
@@ -72,4 +72,4 @@ cd Medora
 python -m pytest -v
 ```
 
-The tests use a temporary database. The project includes demo authentication, scheduling, status transitions and role authorization. Review and understand every component before a presentation; follow your instructor's rules about AI-assisted coding and attribution.
+The tests use a temporary database. The tests cover demo authentication, scheduling and role authorization. Review and understand every component before a presentation; follow your instructor's rules about AI-assisted coding and attribution.

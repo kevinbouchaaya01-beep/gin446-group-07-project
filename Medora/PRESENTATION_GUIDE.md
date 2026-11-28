@@ -10,7 +10,7 @@ Patient → Assistant → Doctor → Admin:
 4. **Admin** sees clinic-wide appointment totals and can add staff or availability.
 5. Changes appear across dashboards via an API refresh every eight seconds.
 
-The extra options are rescheduling, appointment filters, appointment history and changing a password. The core presentation remains the same.
+Appointments are displayed in one table; patients can cancel eligible bookings and book a different available time.
 
 ## Why these technologies?
 
@@ -38,11 +38,8 @@ JavaScript calls `GET /api/appointments` every eight seconds and redraws the app
 **What makes Gemini safe for this prototype?**
 It only extracts scheduling preferences such as specialty, date or time period. The backend checks actual available slots. Users are told not to provide medical information.
 
-**How does rescheduling work?**
-The browser loads open time slots and sends the selected slot to `POST /appointment/<id>/reschedule`. Flask verifies ownership, status and availability before updating the existing appointment record.
-
 **How are passwords protected?**
-Werkzeug stores password hashes rather than plaintext. The change-password route checks the current password and hashes the new one.
+Werkzeug stores password hashes rather than plaintext.
 
 **What is the database limitation?**
 Render free instance disk is not durable. A production version should use a persistent database, such as PostgreSQL, and would require further security and privacy work.
@@ -54,7 +51,7 @@ Render free instance disk is not durable. A production version should use a pers
 | `app.py` | Main Flask routes and SQLite queries |
 | `templates/base.html` | Shared header, messages and layout |
 | `templates/dashboard.html` | Role-based dashboard HTML |
-| `static/app.js` | Appointment refresh, filters, availability, buttons |
+| `static/app.js` | Appointment refresh, availability and status buttons |
 | `static/style.css` | Styling and mobile layout |
 | `tests/test_app.py` | Automated test scenarios |
 

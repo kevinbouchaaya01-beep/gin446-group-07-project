@@ -1,12 +1,8 @@
 import os, secrets, sqlite3, datetime as dt, functools, json, urllib.request
-from io import BytesIO
-from PIL import Image, ImageOps, UnidentifiedImageError
-from pillow_heif import register_heif_opener
-register_heif_opener()
-from flask import Response, Flask, render_template, request, redirect, url_for, session, g, abort, jsonify, flash
+from flask import Flask, render_template, request, redirect, url_for, session, g, abort, jsonify, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 app=Flask(__name__)
-app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY') or secrets.token_hex(32), DATABASE=os.environ.get('DATABASE_PATH','medora.db'), MAX_CONTENT_LENGTH=21*1024*1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE')=='1')
+app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY') or secrets.token_hex(32), DATABASE=os.environ.get('DATABASE_PATH','medora.db'), MAX_CONTENT_LENGTH=1024*1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE')=='1')
 def db():
     if 'db' not in g:
         g.db=sqlite3.connect(app.config['DATABASE']); g.db.row_factory=sqlite3.Row; g.db.execute('PRAGMA foreign_keys=ON')
@@ -19,9 +15,6 @@ def init():
     CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,doctor INTEGER REFERENCES users(id),start TEXT NOT NULL,UNIQUE(doctor,start));
     CREATE TABLE IF NOT EXISTS appointments(id INTEGER PRIMARY KEY,slot INTEGER REFERENCES slots(id),patient INTEGER REFERENCES users(id),status TEXT NOT NULL DEFAULT 'Booked',created TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE UNIQUE INDEX IF NOT EXISTS one_booking ON appointments(slot) WHERE status!='Cancelled';'''); d.commit()
-    if 'profile_picture' not in [column['name'] for column in d.execute('PRAGMA table_info(users)')]:
-        d.execute('ALTER TABLE users ADD COLUMN profile_picture BLOB')
-        d.commit()
     if os.environ.get('DEMO_MODE','0')=='1':
         d.execute(
             "UPDATE users SET email=? WHERE email=? "
@@ -40,7 +33,7 @@ def init():
         d.commit()
 @app.before_request
 def before():
-    g.user=db().execute('SELECT id,name,email,password,role,specialty,profile_picture IS NOT NULL AS has_picture FROM users WHERE id=?',(session.get('uid'),)).fetchone()
+    g.user=db().execute('SELECT id,name,email,password,role,specialty FROM users WHERE id=?',(session.get('uid'),)).fetchone()
     if 'csrf' not in session: session['csrf']=secrets.token_hex(24)
     if request.method=='POST' and not secrets.compare_digest(session['csrf'],request.form.get('csrf','') or request.headers.get('X-CSRF-Token','')): abort(400)
 def roles(*allowed):
@@ -89,14 +82,11 @@ def counts(rows, role):
         return [("Today's visits",len([a for a in active if a['start'].startswith(today)])),('Waiting',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
     return [('Active appointments',len(active)),('Waiting room',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
 
-def valid_slot(slot):
-    return db().execute('SELECT 1 FROM slots WHERE id=? AND start>=?',(slot,dt.datetime.now().isoformat(timespec='minutes'))).fetchone()
-
 @app.get('/dashboard')
 @roles('patient','doctor','assistant','admin')
 def dashboard():
-    doctors=db().execute("SELECT id,name,specialty,profile_picture IS NOT NULL AS has_picture FROM users WHERE role='doctor'").fetchall(); patients=db().execute("SELECT id,name FROM users WHERE role='patient'").fetchall() if g.user['role'] in ('assistant','admin') else []
-    staff=db().execute('SELECT id,name,email,role,specialty,profile_picture IS NOT NULL AS has_picture FROM users ORDER BY role').fetchall() if g.user['role']=='admin' else []
+    doctors=db().execute("SELECT id,name,specialty FROM users WHERE role='doctor'").fetchall(); patients=db().execute("SELECT id,name FROM users WHERE role='patient'").fetchall() if g.user['role'] in ('assistant','admin') else []
+    staff=db().execute('SELECT id,name,email,role,specialty FROM users ORDER BY role').fetchall() if g.user['role']=='admin' else []
     rows=appointments(); return render_template('dashboard.html',doctors=doctors,patients=patients,staff=staff,rows=rows,stats=counts(rows,g.user['role']))
 @app.get('/api/appointments')
 @roles('patient','doctor','assistant','admin')
@@ -112,87 +102,6 @@ def book():
     if not db().execute("SELECT 1 FROM users WHERE id=? AND role='patient'",(patient,)).fetchone() or not db().execute('SELECT 1 FROM slots WHERE id=? AND start>=?',(slot,dt.datetime.now().isoformat(timespec='minutes'))).fetchone(): abort(400)
     try: db().execute('INSERT INTO appointments(slot,patient) VALUES(?,?)',(slot,patient)); db().commit(); flash('Appointment booked.')
     except sqlite3.IntegrityError: flash('That slot is already booked. Choose another.')
-    return redirect(url_for('dashboard'))
-
-@app.post('/appointment/<int:id>/reschedule')
-@roles('patient','assistant','admin')
-def reschedule(id):
-    appointment=db().execute('SELECT * FROM appointments WHERE id=?',(id,)).fetchone()
-    if not appointment: abort(404)
-    if g.user['role']=='patient' and appointment['patient']!=g.user['id']: abort(403)
-    if appointment['status'] not in ('Booked','Confirmed'): abort(400)
-    slot=request.form.get('slot',type=int)
-    if not slot or not valid_slot(slot): abort(400)
-    try:
-        updated=db().execute("UPDATE appointments SET slot=?,status='Booked' WHERE id=? AND status IN ('Booked','Confirmed')",(slot,id))
-        if not updated.rowcount: abort(409)
-        db().commit(); flash('Appointment rescheduled.')
-    except sqlite3.IntegrityError:
-        db().rollback(); flash('That time is no longer available.')
-    return redirect(url_for('dashboard'))
-
-@app.get('/account/picture/<int:user_id>')
-@roles('patient','doctor','assistant','admin')
-def profile_picture(user_id):
-    user=db().execute('SELECT role,profile_picture FROM users WHERE id=?',(user_id,)).fetchone()
-    if not user or (user_id!=g.user['id'] and user['role']!='doctor' and g.user['role']!='admin'):
-        abort(404)
-    if not user['profile_picture']: abort(404)
-    return Response(user['profile_picture'], mimetype='image/jpeg',
-                    headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'})
-
-@app.post('/account/picture')
-@roles('patient','doctor','assistant','admin')
-def update_picture():
-    # Keep feedback next to the profile controls, including normal form fallback.
-    def result(message, ok):
-        if request.headers.get('X-Profile-Upload')=='1':
-            return jsonify(ok=ok,message=message),200 if ok else 400
-        flash(message,'profile')
-        return redirect(url_for('dashboard',_anchor='account'))
-    picture=request.files.get('picture')
-    if not picture:
-        return result('Choose a picture first.',False)
-    data=picture.stream.read(20*1024*1024+1)
-    if len(data)>20*1024*1024:
-        return result('Choose an image smaller than 20 MB.',False)
-    try:
-        with Image.open(BytesIO(data)) as image:
-            if image.format not in ('JPEG','PNG','WEBP','HEIF','HEIC') or image.width*image.height>60000000:
-                raise ValueError()
-            image=ImageOps.exif_transpose(image)
-            image.thumbnail((512,512))
-            output=BytesIO()
-            image.convert('RGB').save(output,format='JPEG',quality=85)
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, RuntimeError):
-        return result('Choose a valid JPG, PNG, WebP or HEIC image (up to 60 megapixels).',False)
-    db().execute('UPDATE users SET profile_picture=? WHERE id=?',(output.getvalue(),g.user['id']))
-    db().commit()
-    return result('Profile picture updated.',True)
-
-@app.post('/account/picture/remove')
-@roles('patient','doctor','assistant','admin')
-def remove_picture():
-    db().execute('UPDATE users SET profile_picture=NULL WHERE id=?',(g.user['id'],))
-    db().commit()
-    flash('Profile picture removed.','profile')
-    return redirect(url_for('dashboard',_anchor='account'))
-
-@app.post('/account/password')
-@roles('patient','doctor','assistant','admin')
-def change_password():
-    old=request.form.get('current_password','')
-    new=request.form.get('new_password','')
-    if not check_password_hash(g.user['password'],old):
-        flash('Current password is incorrect.')
-    elif not 10<=len(new)<=128:
-        flash('New password must be 10–128 characters.')
-    elif new==old:
-        flash('Choose a different password.')
-    else:
-        db().execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(new),g.user['id']))
-        db().commit()
-        flash('Password updated successfully.')
     return redirect(url_for('dashboard'))
 
 @app.post('/appointment/<int:id>/status')
@@ -234,14 +143,5 @@ def smart():
         if date is not None: dt.date.fromisoformat(date)
         matches=[dict(r) for r in db().execute("SELECT s.id,s.start,u.name,u.specialty FROM slots s JOIN users u ON u.id=s.doctor WHERE s.start>=? AND NOT EXISTS(SELECT 1 FROM appointments a WHERE a.slot=s.id AND a.status!='Cancelled') ORDER BY s.start",(dt.datetime.now().isoformat(timespec='minutes'),)) if (not spec or r['specialty']==spec) and (not date or r['start'].startswith(date)) and (not period or (int(r['start'][11:13])<12)==(period=='morning'))][:10]; return jsonify(matches=matches)
     except Exception: return jsonify(error='AI service unavailable or returned invalid data. Use manual booking.'),502
-@app.errorhandler(403)
-@app.errorhandler(404)
-@app.errorhandler(400)
-@app.errorhandler(413)
-def error_page(error):
-    if request.path.startswith('/api/'):
-        return jsonify(error=error.description),error.code
-    return render_template('error.html',code=error.code,message={413:'The upload is too large. Choose a picture smaller than 20 MB.',400:'Please check your request and try again.',403:'You do not have permission to view this page.',404:'This page could not be found.'}[error.code]),error.code
-
 with app.app_context(): init()
 if __name__=='__main__': app.run(port=5000)

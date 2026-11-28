@@ -73,28 +73,40 @@ def appointments():
     if role=='doctor': sql+=' WHERE s.doctor=?'; args=[g.user['id']]
     return [dict(r) for r in db().execute(sql+' ORDER BY s.start',args)]
 
-def counts(rows, role):
-    active=[a for a in rows if a['status'] not in ('Cancelled','Completed')]
-    if role=='patient':
-        return [('Upcoming',len([a for a in active if a['start']>=dt.datetime.now().isoformat(timespec='minutes')])),('Completed',len([a for a in rows if a['status']=='Completed'])),('Cancelled',len([a for a in rows if a['status']=='Cancelled']))]
-    if role=='doctor':
-        today=dt.date.today().isoformat()
-        return [("Today's visits",len([a for a in active if a['start'].startswith(today)])),('Waiting',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
-    return [('Active appointments',len(active)),('Waiting room',len([a for a in rows if a['status']=='Waiting'])),('Completed',len([a for a in rows if a['status']=='Completed']))]
+# JavaScript calculates the counters from the authorized appointment list.
+STAT_LABELS = {
+    'patient': ['Upcoming', 'Completed', 'Cancelled'],
+    'doctor': ["Today's visits", 'Waiting', 'Completed'],
+    'assistant': ['Active appointments', 'Waiting room', 'Completed'],
+    'admin': ['Active appointments', 'Waiting room', 'Completed']
+}
 
 @app.get('/dashboard')
 @roles('patient','doctor','assistant','admin')
 def dashboard():
     doctors=db().execute("SELECT id,name,specialty FROM users WHERE role='doctor'").fetchall(); patients=db().execute("SELECT id,name FROM users WHERE role='patient'").fetchall() if g.user['role'] in ('assistant','admin') else []
     staff=db().execute('SELECT id,name,email,role,specialty FROM users ORDER BY role').fetchall() if g.user['role']=='admin' else []
-    rows=appointments(); return render_template('dashboard.html',doctors=doctors,patients=patients,staff=staff,rows=rows,stats=counts(rows,g.user['role']))
+    return render_template('dashboard.html', doctors=doctors, patients=patients, staff=staff, stats=STAT_LABELS[g.user['role']])
 @app.get('/api/appointments')
 @roles('patient','doctor','assistant','admin')
 def api_appointments(): return jsonify(appointments())
+# Shared query for both manual and Gemini booking.
+def available_slots():
+    return [dict(row) for row in db().execute("""
+        SELECT s.id, s.start, u.name, u.specialty, s.doctor
+        FROM slots s JOIN users u ON u.id=s.doctor
+        WHERE s.start>=? AND NOT EXISTS(
+            SELECT 1 FROM appointments a
+            WHERE a.slot=s.id AND a.status!='Cancelled')
+        ORDER BY s.start
+    """, (dt.datetime.now().isoformat(timespec='minutes'),))]
+
 @app.get('/api/slots')
 @roles('patient','assistant','admin')
 def slots():
-    return jsonify([dict(r) for r in db().execute("SELECT s.id,s.start,u.name,u.specialty FROM slots s JOIN users u ON u.id=s.doctor WHERE s.doctor=? AND s.start>=? AND NOT EXISTS(SELECT 1 FROM appointments a WHERE a.slot=s.id AND a.status!='Cancelled') ORDER BY s.start",(request.args.get('doctor',type=int),dt.datetime.now().isoformat(timespec='minutes')))])
+    doctor = request.args.get('doctor', type=int)
+    return jsonify([s for s in available_slots() if s['doctor']==doctor])
+
 @app.post('/book')
 @roles('patient','assistant','admin')
 def book():
@@ -141,7 +153,11 @@ def smart():
         req=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/'+os.environ.get('GEMINI_MODEL','gemini-2.5-flash')+':generateContent',data=json.dumps({'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'responseMimeType':'application/json'}}).encode(),headers={'Content-Type':'application/json','x-goog-api-key':key}); result=json.loads(urllib.request.urlopen(req,timeout=15).read()); prefs=json.loads(result['candidates'][0]['content']['parts'][0]['text']); spec=prefs.get('specialty'); date=prefs.get('date'); period=prefs.get('period')
         if spec is not None and spec not in specialties or period not in (None,'morning','afternoon'): raise ValueError()
         if date is not None: dt.date.fromisoformat(date)
-        matches=[dict(r) for r in db().execute("SELECT s.id,s.start,u.name,u.specialty FROM slots s JOIN users u ON u.id=s.doctor WHERE s.start>=? AND NOT EXISTS(SELECT 1 FROM appointments a WHERE a.slot=s.id AND a.status!='Cancelled') ORDER BY s.start",(dt.datetime.now().isoformat(timespec='minutes'),)) if (not spec or r['specialty']==spec) and (not date or r['start'].startswith(date)) and (not period or (int(r['start'][11:13])<12)==(period=='morning'))][:10]; return jsonify(matches=matches)
+        matches = [s for s in available_slots()
+                   if (not spec or s['specialty']==spec)
+                   and (not date or s['start'].startswith(date))
+                   and (not period or (int(s['start'][11:13])<12)==(period=='morning'))]
+        return jsonify(matches=matches[:10])
     except Exception: return jsonify(error='AI service unavailable or returned invalid data. Use manual booking.'),502
 with app.app_context(): init()
 if __name__=='__main__': app.run(port=5000)

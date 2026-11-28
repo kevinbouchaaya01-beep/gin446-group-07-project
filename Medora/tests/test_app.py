@@ -90,3 +90,24 @@ def test_public_pages_and_assets(client):
 def test_booking_ui_elements(client):
     response = login(client, 'patient@medora.test')
     assert b'doctor-heart.svg' in response.data
+
+
+def test_clinic_workflow(client):
+    from app import db
+    login(client, 'patient@medora.test')
+    with app.app_context():
+        doctor = db().execute("SELECT id FROM users WHERE email='cardio@medora.test'").fetchone()[0]
+    slot = client.get('/api/slots?doctor='+str(doctor)).json[0]['id']
+    client.post('/book', data={'csrf':csrf(client),'slot':slot})
+    appointment = client.get('/api/appointments').json[0]['id']
+    url = '/appointment/'+str(appointment)+'/status'
+    client.post('/logout',data={'csrf':csrf(client)})
+    login(client,'assistant@medora.test')
+    assert client.post('/staff',data={'csrf':csrf(client)}).status_code == 403
+    for status in ('Confirmed','Waiting'):
+        assert client.post(url,data={'csrf':csrf(client),'status':status}).status_code == 302
+    client.post('/logout',data={'csrf':csrf(client)})
+    login(client,'cardio@medora.test')
+    for status in ('In consultation','Completed'):
+        assert client.post(url,data={'csrf':csrf(client),'status':status}).status_code == 302
+    assert client.get('/api/appointments').json[0]['status']=='Completed'

@@ -7,8 +7,8 @@
   <p>{{ {'patient':'Your next appointment is just a few clicks away.','doctor':'Your schedule, consultations and patient queue in one place.','assistant':'Coordinate visits and keep your clinic running smoothly.','admin':'A clearer view of your clinic and staff.'}[role] }}</p>
 </section>
 <div class="grid stats">
-{% for title, value in stats %}
-  <article class="stat-card"><div class="stat-symbol" aria-hidden="true">{{["▦","◷","✓"][loop.index0]}}</div><small>{{title}}</small><strong data-stat="{{loop.index0}}">{{value}}</strong><span class="stat-detail">{% if role=='patient' %}Your appointment records{% elif role=='doctor' %}Your patient schedule{% else %}Clinic overview{% endif %}</span></article>
+{% for title in stats %}
+  <article class="stat-card"><div class="stat-symbol" aria-hidden="true">{{["▦","◷","✓"][loop.index0]}}</div><small>{{title}}</small><strong data-stat="{{loop.index0}}">—</strong><span class="stat-detail">{% if role=='patient' %}Your appointment records{% elif role=='doctor' %}Your patient schedule{% else %}Clinic overview{% endif %}</span></article>
 {% endfor %}
 </div>
 
